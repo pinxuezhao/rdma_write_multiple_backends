@@ -205,9 +205,11 @@ struct Network {
 	 int ret;
     	int max_retries = 1000; // 设置最大重试次数避免无限循环
     	int attempt = 0;
+
+	auto src_mem_desc = fi_mr_desc(src_mr);
     
     	do {
-        	ret = fi_writedata(ep, src_buf.data, len, &src_mr->mem_desc, 0, dest_addr,
+        	ret = fi_writedata(ep, src_buf.data, len, src_mem_desc, 0, dest_addr,
                           dest_ptr, dest_key, nullptr);
         
         	if (ret == -FI_EAGAIN) {
@@ -438,8 +440,8 @@ int ClientMain(int argc, char **argv) {
 
     printf("ConnectMessage sent, waiting for RDMA write...\n");
 
-    sleep(2);
-    net.PollCompletion(); 
+    usleep(2);
+//    net.PollCompletion(); 
 
     uint8_t *data = (uint8_t*)data_buf.data;
     for (size_t i = 0; i < data_buf.size; i++) {

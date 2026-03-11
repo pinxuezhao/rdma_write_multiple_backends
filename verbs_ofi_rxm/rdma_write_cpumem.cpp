@@ -188,6 +188,10 @@ struct Network {
         auto key = fi_mr_key(mr);
         printf("KEY: %lX\n", key);
 
+	auto desc = fi_mr_desc(mr);
+	printf("mr->desc = %lX\n", &mr->mem_desc);
+	printf("DESC: %lX\n", desc);
+
         return mr;
     }
 
@@ -202,13 +206,19 @@ struct Network {
 //        FI_CHECK(fi_writedata(ep, src_buf.data, len, &src_mr->mem_desc, 0, dest_addr,
 //                         0, dest_key, nullptr));
         // For verbs;ofi_rxm, we have FI_MR_VIRT_ADDR, so we need to specify the target address of RDMA write                   
+	
+	
 	 int ret;
     	int max_retries = 2000; 
     	int attempt = 0;
+
+	auto src_mem_desc = fi_mr_desc(src_mr);
     
     	do {
-        	ret = fi_writedata(ep, src_buf.data, len, &src_mr->mem_desc, 0, dest_addr,
+		printf("1\n");
+        	ret = fi_writedata(ep, src_buf.data, len, src_mem_desc, 0, dest_addr,
                           dest_ptr, dest_key, nullptr);
+		printf("2\n");
         
         	if (ret == -FI_EAGAIN) {
             		attempt++;
@@ -281,10 +291,10 @@ struct fi_info* GetInfo() {
     hints->ep_attr->type = FI_EP_RDM;
     hints->fabric_attr->prov_name = strdup("verbs;ofi_rxm");
     hints->domain_attr->mr_mode = FI_MR_LOCAL | FI_MR_VIRT_ADDR | FI_MR_ALLOCATED | FI_MR_PROV_KEY;
-    /*
-    hints->domain_attr->control_progress = FI_PROGRESS_AUTO;
-    hints->domain_attr->data_progress = FI_PROGRESS_AUTO;
-    */
+    
+//    hints->domain_attr->control_progress = FI_PROGRESS_AUTO;
+//    hints->domain_attr->data_progress = FI_PROGRESS_AUTO;
+
     struct fi_info *info;
     FI_CHECK(fi_getinfo(FI_VERSION(1, 22), nullptr, nullptr, 0, hints, &info));
     fi_freeinfo(hints);
@@ -392,12 +402,21 @@ int ServerMain(int argc, char **argv) {
 
     fi_addr_t client_addr = net.AddPeerAddress(conn_msg.client_addr);
 
-    printf("Performing RDMA write to client memory...\n");
+    printf("Performing RDMA write 0 to client memory...\n");
     net.PostWrite(client_addr, data_buf, data_mr,
                   conn_msg.mem_addr, conn_msg.rkey, kMemoryRegionSize);
     net.PollCompletion();
 
-    printf("RDMA write completed successfully\n");
+    printf("RDMA write completed 0 successfully\n");
+
+    memset(data_buf.data, 0xDC, data_buf.size);
+
+    printf("Performing RDMA write 1 to client memory...\n");
+    net.PostWrite(client_addr, data_buf, data_mr,
+                  conn_msg.mem_addr, conn_msg.rkey, kMemoryRegionSize);
+    net.PollCompletion();
+    printf("RDMA write completed 1 successfully\n");
+
 
     fi_close(&data_mr->fid);
     fi_freeinfo(info);
@@ -434,6 +453,7 @@ int ClientMain(int argc, char **argv) {
 
     printf("ConnectMessage sent, waiting for RDMA write...\n");
 
+
     net.PollCompletion(); 
 
     uint8_t *data = (uint8_t*)data_buf.data;
@@ -444,7 +464,18 @@ int ClientMain(int argc, char **argv) {
             std::exit(-1);
         }
     }
-    printf("RDMA write completed and data verified successfully!\n");
+    printf("RDMA write 0 completed and data verified successfully!\n");
+
+    net.PollCompletion(); 
+
+    for (size_t i = 0; i < data_buf.size; i++) {
+        if (data[i] != 0xDC) {
+            printf("Data verification failed at offset %zu (got 0x%02x, expected 0xBA)\n",
+                   i, data[i]);
+            std::exit(-1);
+        }
+    }
+    printf("RDMA write 1 completed and data verified successfully!\n");
 
     fi_close(&data_mr->fid);
     fi_freeinfo(info);
