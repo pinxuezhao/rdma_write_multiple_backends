@@ -201,9 +201,9 @@ struct Network {
 
 //        FI_CHECK(fi_writedata(ep, src_buf.data, len, &src_mr->mem_desc, 0, dest_addr,
 //                         0, dest_key, nullptr));
-        // For tcp;ofi_rxm, we have FI_MR_VIRT_ADDR, so we need to specify the target address of RDMA write                   
+        // For verbs;ofi_rxm, we have FI_MR_VIRT_ADDR, so we need to specify the target address of RDMA write                   
 	 int ret;
-    	int max_retries = 1000; // 设置最大重试次数避免无限循环
+    	int max_retries = 2000; 
     	int attempt = 0;
     
     	do {
@@ -214,24 +214,18 @@ struct Network {
             		attempt++;
             		printf("FI_EAGAIN encountered, attempt %d, driving progress...\n", attempt);
             
-            // 驱动进度：尝试读取CQ（即使没有完成事件）
             		struct fi_cq_err_entry cqe;
             		ssize_t cq_ret = fi_cq_read(cq, &cqe, 1);
             
-            // 如果CQ为空（返回-FI_EAGAIN），这很正常，继续
             		if (cq_ret == -FI_EAGAIN) {
-                // 可以加入短暂休眠避免忙等待
-               			usleep(1000); // 休眠1毫秒
+               			usleep(1000); 
             		} else if (cq_ret < 0 && cq_ret != -FI_EAGAIN) {
-                // 其他错误
                 		fprintf(stderr, "fi_cq_read error: %s\n", fi_strerror(-(int)cq_ret));
                 		break;
             		} else if (cq_ret > 0) {
-                // 读取到完成事件，但这里我们只是驱动进度，不处理事件
                 		printf("Read completion event while driving progress\n");
             		}
         	} else if (ret) {
-            // 其他错误
             		fprintf(stderr, "fi_writedata failed with %d (%s)\n", 
                     		ret, fi_strerror(-ret));
             		exit(1);
@@ -285,10 +279,12 @@ struct fi_info* GetInfo() {
 
     hints->caps = FI_MSG | FI_RMA | FI_LOCAL_COMM | FI_REMOTE_COMM | FI_REMOTE_WRITE | FI_REMOTE_READ;
     hints->ep_attr->type = FI_EP_RDM;
-    hints->fabric_attr->prov_name = strdup("tcp;ofi_rxm");
+    hints->fabric_attr->prov_name = strdup("verbs;ofi_rxm");
     hints->domain_attr->mr_mode = FI_MR_LOCAL | FI_MR_VIRT_ADDR | FI_MR_ALLOCATED | FI_MR_PROV_KEY;
-//    hints->domain_attr->mr_mode = FI_MR_ENDPOINT | FI_MR_ALLOCATED | FI_MR_PROV_KEY;
-
+    /*
+    hints->domain_attr->control_progress = FI_PROGRESS_AUTO;
+    hints->domain_attr->data_progress = FI_PROGRESS_AUTO;
+    */
     struct fi_info *info;
     FI_CHECK(fi_getinfo(FI_VERSION(1, 22), nullptr, nullptr, 0, hints, &info));
     fi_freeinfo(hints);
@@ -438,7 +434,6 @@ int ClientMain(int argc, char **argv) {
 
     printf("ConnectMessage sent, waiting for RDMA write...\n");
 
-    sleep(2);
     net.PollCompletion(); 
 
     uint8_t *data = (uint8_t*)data_buf.data;
