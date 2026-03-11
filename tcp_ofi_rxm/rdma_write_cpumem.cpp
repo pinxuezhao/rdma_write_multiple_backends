@@ -62,31 +62,31 @@ constexpr int kSocketPort = 7766;
 
 
 struct Address {
-    uint8_t bytes[8];
+    uint8_t bytes[16];
 
-    Address(uint8_t bytes[8]) { memcpy(this->bytes, bytes, 8); }
+    Address(uint8_t bytes[16]) { memcpy(this->bytes, bytes, 16); }
     Address() {
-    	for(int i=0; i<8;i++){
+    	for(int i=0; i<16;i++){
 		bytes[i] = 0;
 	}
     }
 
 
     std::string ToString() const {
-        char buf[17];
-        for (size_t i = 0; i < 8; i++) {
+        char buf[33];
+        for (size_t i = 0; i < 16; i++) {
             snprintf(buf + 2 * i, 3, "%02x", bytes[i]);
         }
-        return std::string(buf, 16);
+        return std::string(buf, 32);
     }
 
     static Address Parse(const std::string &str) {
-        if (str.size() != 16) {
+        if (str.size() != 32) {
             fprintf(stderr, "Unexpected address length %zu\n", str.size());
             exit(1);
         }
-        uint8_t bytes[8];
-        for (size_t i = 0; i < 8; i++) {
+        uint8_t bytes[16];
+        for (size_t i = 0; i < 16; i++) {
             sscanf(str.c_str() + 2 * i, "%02hhx", &bytes[i]);
         }
         return Address{bytes};
@@ -148,10 +148,10 @@ struct Network {
         FI_CHECK(fi_ep_bind(ep, &av->fid, 0));
         FI_CHECK(fi_enable(ep));
 
-        uint8_t addr_bytes[16];
+        uint8_t addr_bytes[32];
         size_t addrlen = sizeof(addr_bytes);
         FI_CHECK(fi_getname(&ep->fid, addr_bytes, &addrlen));
-        CHECK(addrlen == 8);
+        CHECK(addrlen == 16);
 
         return Network{fi, fabric, domain, cq, av, ep, Address{addr_bytes}};
     }
@@ -177,10 +177,13 @@ struct Network {
         auto ret = fi_mr_regattr(domain, &mr_attr, flags, &mr);
         printf("MR_REGATTR RET: %d\n", ret);
 
+	// For tcp;ofi_rxm, we don't have FI_MR_ENDPOINT, so we don't need call fi_mr_bind and fi_mr_enable
+	/* 
         ret = fi_mr_bind(mr, (fid*)ep, 0);
         printf("MR_BIND RET: %d\n", ret);
         ret = fi_mr_enable(mr);
         printf("MR_ENABLE RET: %d\n", ret);
+	*/
 
         auto key = fi_mr_key(mr);
         printf("KEY: %lX\n", key);
@@ -196,8 +199,11 @@ struct Network {
         printf("----size: %ld\n", len);
         printf("----dest_key: 0x%lx\n", dest_key);
 
+//        FI_CHECK(fi_writedata(ep, src_buf.data, len, &src_mr->mem_desc, 0, dest_addr,
+//                         0, dest_key, nullptr));
+        // For tcp;ofi_rxm, we have FI_MR_VIRT_ADDR, so we need to specify the target address of RDMA write                   
         FI_CHECK(fi_writedata(ep, src_buf.data, len, &src_mr->mem_desc, 0, dest_addr,
-                         0, dest_key, nullptr));
+                         dest_ptr, dest_key, nullptr));
     }
 
     void PollCompletion() {
@@ -231,9 +237,9 @@ struct fi_info* GetInfo() {
 
     hints->caps = FI_MSG | FI_RMA | FI_LOCAL_COMM | FI_REMOTE_COMM | FI_REMOTE_WRITE | FI_REMOTE_READ;
     hints->ep_attr->type = FI_EP_RDM;
-    hints->fabric_attr->prov_name = strdup("cxi");
-//    hints->domain_attr->mr_mode = FI_MR_LOCAL | FI_MR_VIRT_ADDR | FI_MR_ALLOCATED | FI_MR_PROV_KEY;
-    hints->domain_attr->mr_mode = FI_MR_ENDPOINT | FI_MR_ALLOCATED | FI_MR_PROV_KEY;
+    hints->fabric_attr->prov_name = strdup("tcp;ofi_rxm");
+    hints->domain_attr->mr_mode = FI_MR_LOCAL | FI_MR_VIRT_ADDR | FI_MR_ALLOCATED | FI_MR_PROV_KEY;
+//    hints->domain_attr->mr_mode = FI_MR_ENDPOINT | FI_MR_ALLOCATED | FI_MR_PROV_KEY;
 
     struct fi_info *info;
     FI_CHECK(fi_getinfo(FI_VERSION(1, 22), nullptr, nullptr, 0, hints, &info));
@@ -313,7 +319,7 @@ void sendConnectMessage(const std::string& server_ip, int port, const ConnectMes
 }
 
 int ServerMain(int argc, char **argv) {
-    std::string server_ip = "10.100.88.113";  // change this to the custom server IP
+    std::string server_ip = "148.187.111.36";  // change this to the custom server IP
 
     if (argc >= 2) {
         server_ip = argv[1];  
