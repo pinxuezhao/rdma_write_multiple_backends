@@ -457,7 +457,7 @@ int ServerMain(int argc, char **argv) {
      net.PollCompletion();
 
 
-    printf("Measuring phase...\n");
+//    printf("Measuring phase...\n");
 
 
     Timer timer;
@@ -521,14 +521,14 @@ int ClientMain(int argc, char **argv) {
 
     printf("Warmup phase...\n");
     for(int i =0; i<100; i++){
-    	printf("Server -> Client write: received...\n");
+    //	printf("Server -> Client write: received...\n");
     	net.PollCompletion(); 
 
     	net.PostWrite(server_fi_addr, data_buf_2, data_mr_2,
                    server_mem_addr, server_rkey, kMemoryRegionSize);
     	net.PollCompletion();
     
-	printf("Client -> Server write: launched...\n");
+//	printf("Client -> Server write: launched...\n");
     }
 
     net.PollCompletion();
@@ -537,7 +537,7 @@ int ClientMain(int argc, char **argv) {
     net.PollCompletion();
 
 
-    printf("Measuring phase...\n");
+//    printf("Measuring phase...\n");
     for(int i =0; i<num_iters; i++){
 //    	printf("Server -> Client write: received...\n");
     	net.PollCompletion(); 
