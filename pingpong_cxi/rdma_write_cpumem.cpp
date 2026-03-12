@@ -33,6 +33,8 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
+static int num_iters = 1000000;
+
 static long perf_event_open(struct perf_event_attr *hw_event, pid_t pid,
                             int cpu, int group_fd, unsigned long flags) {
     return syscall(__NR_perf_event_open, hw_event, pid, cpu, group_fd, flags);
@@ -238,7 +240,6 @@ struct Network {
             		ssize_t cq_ret = fi_cq_read(cq, &cqe, 1);
             
             		if (cq_ret == -FI_EAGAIN) {
-               			usleep(1000); 
             		} else if (cq_ret < 0 && cq_ret != -FI_EAGAIN) {
                 		fprintf(stderr, "fi_cq_read error: %s\n", fi_strerror(-(int)cq_ret));
                 		break;
@@ -385,7 +386,7 @@ void sendConnectMessage(const std::string& server_ip, int port, const ConnectMes
 
 int ServerMain(int argc, char **argv) {
     std::string server_ip = "10.100.88.18";  // change this to the custom server IP
-    std::string client_ip = "10.100.88.54";
+    std::string client_ip = "10.100.88.15";
 
     if (argc >= 2) {
         server_ip = argv[1];  
@@ -449,11 +450,16 @@ int ServerMain(int argc, char **argv) {
 
     printf("Measuring phase...\n");
 
+         net.PostWrite(client_addr, data_buf, data_mr,
+                   conn_msg.mem_addr, conn_msg.rkey, kMemoryRegionSize);
+     net.PollCompletion();
+
+     net.PollCompletion();
 
     Timer timer;
 
     timer.start();
-    for(int i=0; i<1000; i++){
+    for(int i=0; i<num_iters; i++){
     
 //    	printf("Server -> Client write launched...\n");
     	net.PostWrite(client_addr, data_buf, data_mr,
@@ -465,7 +471,7 @@ int ServerMain(int argc, char **argv) {
 //    	printf("Client -> Server write received...\n");
     }
     auto duration = timer.stop();
-    printf("server duration: %f (ms)\n", (double)(duration)/(1000*1000*2));
+    printf("server duration: %f (ms)\n", (double)(duration)/(1000*num_iters*2));
 
     fi_close(&data_mr->fid);
     fi_close(&data_mr_2->fid);
@@ -522,7 +528,13 @@ int ClientMain(int argc, char **argv) {
     }
 
     printf("Measuring phase...\n");
-    for(int i =0; i<1000; i++){
+
+    net.PollCompletion();
+    net.PostWrite(server_fi_addr, data_buf_2, data_mr_2,
+                    server_mem_addr, server_rkey, kMemoryRegionSize);
+    net.PollCompletion();
+
+    for(int i =0; i<num_iters; i++){
 //    	printf("Server -> Client write: received...\n");
     	net.PollCompletion(); 
 
