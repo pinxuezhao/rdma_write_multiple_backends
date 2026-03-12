@@ -198,27 +198,26 @@ struct Network {
     void PostWrite(fi_addr_t dest_addr, Buffer &src_buf, struct fid_mr *src_mr,
                    uint64_t dest_ptr, uint64_t dest_key, size_t len) {
 
-        printf("Server Debug: Performing RDMA write:\n");
+	    
+	/*
+        printf("PostWrite Debug: Performing RDMA write:\n");
         printf("----dest_addr: 0x%lx\n", dest_ptr);
         printf("----size: %ld\n", len);
         printf("----dest_key: 0x%lx\n", dest_key);
-
-//        FI_CHECK(fi_writedata(ep, src_buf.data, len, &src_mr->mem_desc, 0, dest_addr,
-//                         0, dest_key, nullptr));
-        // For verbs;ofi_rxm, we have FI_MR_VIRT_ADDR, so we need to specify the target address of RDMA write                   
-	
+	*/
 	
 	 int ret;
-    	int max_retries = 2000; 
+    	int max_retries = 40; 
     	int attempt = 0;
 
 	auto src_mem_desc = fi_mr_desc(src_mr);
+
+	printf("----src_addr: 0x%lx\n", src_buf.data);
+	printf("----src_mem_desc: %lX\n", src_mem_desc);
     
     	do {
-		printf("1\n");
         	ret = fi_writedata(ep, src_buf.data, len, src_mem_desc, 0, dest_addr,
                           dest_ptr, dest_key, nullptr);
-		printf("2\n");
         
         	if (ret == -FI_EAGAIN) {
             		attempt++;
@@ -335,8 +334,8 @@ ConnectMessage acceptAndReceiveMessage(int server_sock) {
     ssize_t n = recv(client_sock, &msg, sizeof(msg), 0);
     CHECK(n == sizeof(msg));
 
-    printf("Received ConnectMessage from client:\n");
-    printf("  Client address: %s\n", msg.client_addr.ToString().c_str());
+    printf("Received ConnectMessage:\n");
+    printf("  net address: %s\n", msg.client_addr.ToString().c_str());
     printf("  Memory address: 0x%lx\n", msg.mem_addr);
     printf("  Memory size: %lu\n", msg.mem_size);
     printf("  RKey: 0x%lx\n", msg.rkey);
@@ -356,11 +355,11 @@ void sendConnectMessage(const std::string& server_ip, int port, const ConnectMes
 
     CHECK(inet_pton(AF_INET, server_ip.c_str(), &addr.sin_addr) == 1);
 
-    printf("Connecting to server at %s:%d...\n", server_ip.c_str(), port);
+    printf("Connecting to %s:%d...\n", server_ip.c_str(), port);
     CHECK(connect(sockfd, (struct sockaddr*)&addr, sizeof(addr)) == 0);
 
-    printf("Sending ConnectMessage to server:\n");
-    printf("  Client address: %s\n", msg.client_addr.ToString().c_str());
+    printf("Sending ConnectMessage:\n");
+    printf("  net address: %s\n", msg.client_addr.ToString().c_str());
     printf("  Memory address: 0x%lx\n", msg.mem_addr);
     printf("  Memory size: %lu\n", msg.mem_size);
     printf("  RKey: 0x%lx\n", msg.rkey);
@@ -374,6 +373,7 @@ void sendConnectMessage(const std::string& server_ip, int port, const ConnectMes
 
 int ServerMain(int argc, char **argv) {
     std::string server_ip = "148.187.111.36";  // change this to the custom server IP
+    std::string client_ip = "148.187.111.37";
 
     if (argc >= 2) {
         server_ip = argv[1];  
@@ -390,8 +390,10 @@ int ServerMain(int argc, char **argv) {
            net.addr.ToString().c_str(), server_ip.c_str());
 
     auto data_buf = Buffer::Alloc(kMemoryRegionSize, kBufAlign);
+    auto data_buf_2 = Buffer::Alloc(kMemoryRegionSize, kBufAlign);
 
     struct fid_mr *data_mr = net.RegisterMemory(data_buf);
+    struct fid_mr *data_mr_2 = net.RegisterMemory(data_buf_2);
 
     memset(data_buf.data, 0xBA, data_buf.size);
 
@@ -400,8 +402,25 @@ int ServerMain(int argc, char **argv) {
     ConnectMessage conn_msg = acceptAndReceiveMessage(server_sock);
     close(server_sock);
 
-    fi_addr_t client_addr = net.AddPeerAddress(conn_msg.client_addr);
+    ConnectMessage server_conn_msg;
+    server_conn_msg.client_addr = net.addr;
+    server_conn_msg.mem_addr = (uint64_t)data_buf_2.data;
+    server_conn_msg.mem_size = data_buf_2.size;
+    server_conn_msg.rkey = fi_mr_key(data_mr_2);
 
+    printf("Server Debug: Ready to send metadata:\n");
+    printf("----server_addr: %s\n", net.addr.ToString().c_str());
+    printf("----server mem_addr: %p\n", data_buf_2.data);
+    printf("----server mem_size: %ld\n", data_buf_2.size);
+    printf("----server rkey: 0x%lx\n", server_conn_msg.rkey);
+
+//    fi_addr_t server_fi_addr = net.AddPeerAddress(server_addr);
+    sendConnectMessage(client_ip, kSocketPort, server_conn_msg);
+
+    printf("Server send metadata to client\n");
+
+
+    fi_addr_t client_addr = net.AddPeerAddress(conn_msg.client_addr);
     printf("Performing RDMA write 0 to client memory...\n");
     net.PostWrite(client_addr, data_buf, data_mr,
                   conn_msg.mem_addr, conn_msg.rkey, kMemoryRegionSize);
@@ -417,8 +436,33 @@ int ServerMain(int argc, char **argv) {
     net.PollCompletion();
     printf("RDMA write completed 1 successfully\n");
 
+    printf("Server waiting the RDMA write from client...\n");
+
+    net.PollCompletion();
+    uint8_t *data = (uint8_t*)data_buf_2.data;
+    for (size_t i = 0; i < data_buf_2.size; i++) {
+        if (data[i] != 0xAC) {
+            printf("Data verification failed at offset %zu (got 0x%02x, expected 0xAC)\n",
+                   i, data[i]);
+            std::exit(-1);
+        }
+    }
+    printf("RDMA write 0 (client->server) completed and data verified successfully!\n");
+
+
+    net.PollCompletion();
+    data = (uint8_t*)data_buf_2.data;
+    for (size_t i = 0; i < data_buf_2.size; i++) {
+        if (data[i] != 0xBD) {
+            printf("Data verification failed at offset %zu (got 0x%02x, expected 0xBD)\n",
+                   i, data[i]);
+            std::exit(-1);
+        }
+    }
+    printf("RDMA write 1 (client->server) completed and data verified successfully!\n");
 
     fi_close(&data_mr->fid);
+    fi_close(&data_mr_2->fid);
     fi_freeinfo(info);
     return 0;
 }
@@ -432,8 +476,10 @@ int ClientMain(int argc, char **argv) {
     Network net = Network::Open(info);
 
     auto data_buf = Buffer::Alloc(kMemoryRegionSize, kBufAlign);
+    auto data_buf_2 = Buffer::Alloc(kMemoryRegionSize, kBufAlign);
 
     struct fid_mr *data_mr = net.RegisterMemory(data_buf);
+    struct fid_mr *data_mr_2 = net.RegisterMemory(data_buf_2);
 
     ConnectMessage conn_msg;
     conn_msg.client_addr = net.addr;
@@ -447,13 +493,20 @@ int ClientMain(int argc, char **argv) {
     printf("----client mem_size: %ld\n", data_buf.size);
     printf("----client rkey: 0x%lx\n", conn_msg.rkey);
 
-    fi_addr_t server_fi_addr = net.AddPeerAddress(server_addr);
 
     sendConnectMessage(server_ip, kSocketPort, conn_msg);
 
-    printf("ConnectMessage sent, waiting for RDMA write...\n");
+    printf("ConnectMessage sent, waiting for server to exchange metadata\n");
 
+    int client_sock = createSocketServer(kSocketPort);
+    ConnectMessage server_conn_msg = acceptAndReceiveMessage(client_sock);
+    close(client_sock);
+    auto server_mem_addr = server_conn_msg.mem_addr;
+    auto server_rkey = server_conn_msg.rkey;
 
+    fi_addr_t server_fi_addr = net.AddPeerAddress(server_conn_msg.client_addr);
+
+    printf("Client waiting for RDMA write from Server...\n");
     net.PollCompletion(); 
 
     uint8_t *data = (uint8_t*)data_buf.data;
@@ -464,7 +517,7 @@ int ClientMain(int argc, char **argv) {
             std::exit(-1);
         }
     }
-    printf("RDMA write 0 completed and data verified successfully!\n");
+    printf("RDMA write 0 (server->client) completed and data verified successfully!\n");
 
     net.PollCompletion(); 
 
@@ -475,9 +528,23 @@ int ClientMain(int argc, char **argv) {
             std::exit(-1);
         }
     }
-    printf("RDMA write 1 completed and data verified successfully!\n");
+    printf("RDMA write 1 (server->client) completed and data verified successfully!\n");
+
+    printf("Client performing RDMA write 0 to server memory...\n");
+    memset(data_buf_2.data, 0xAC, data_buf_2.size); 
+    net.PostWrite(server_fi_addr, data_buf_2, data_mr_2,
+                   server_mem_addr, server_rkey, kMemoryRegionSize);
+    net.PollCompletion();
+
+    printf("Client performing RDMA write 1 to server memory...\n");
+    memset(data_buf_2.data, 0xBD, data_buf_2.size); 
+    net.PostWrite(server_fi_addr, data_buf_2, data_mr_2,
+                   server_mem_addr, server_rkey, kMemoryRegionSize);
+    net.PollCompletion();
+
 
     fi_close(&data_mr->fid);
+    fi_close(&data_mr_2->fid);
     fi_freeinfo(info);
     return 0;
 }
